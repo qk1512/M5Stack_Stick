@@ -19,14 +19,14 @@ bool ToFSensor::begin(int pin_sda, int pin_scl) {
     return true;
 }
 
-void ToFSensor::update() {
+void ToFSensor::update(bool is_moving) {
     if (!initialized) return;
     
     units.update();
     
     if (unit.updated()) {
         auto range = unit.range();
-        last_distance = filter.process(range, false);
+        last_distance = filter.process(range, is_moving);
     }
 }
 

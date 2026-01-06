@@ -20,13 +20,13 @@ int shared_distance = -1;
 IMUData shared_imu_data;
 bool shared_is_moving = false;
 
-// Task: Read IMU sensor
+// Task: Read IMU sensor at high frequency for motion detection
 void imuTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms = 10Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(50); // 50ms = 20Hz
     
     for (;;) {
-        // Update IMU
+        // Update IMU sensor
         imuSensor.update();
         IMUData imu_data = imuSensor.getData();
         bool is_moving = imuSensor.isMoving();
@@ -45,11 +45,18 @@ void imuTask(void *pvParameters) {
 // Task: Read ToF sensor
 void sensorTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 200ms = 5Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms = 10Hz
     
     for (;;) {
-        // Update sensor
-        tofSensor.update();
+        // Get current motion state for adaptive filtering
+        bool is_moving = false;
+        if (xSemaphoreTake(imuMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            is_moving = shared_is_moving;
+            xSemaphoreGive(imuMutex);
+        }
+        
+        // Update sensor with motion-aware filtering
+        tofSensor.update(is_moving);
         int distance = tofSensor.getDistance();
         
         // Update shared data with mutex protection
@@ -62,12 +69,13 @@ void sensorTask(void *pvParameters) {
     }
 }
 
-// Task: Update display
+// Task: Update display and handle UI interactions
 void displayTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(250); // 250ms = 4Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms = 10Hz
     
     for (;;) {
+        // Update M5 button states
         M5.update();
         
         // Handle button press to toggle display mode
@@ -75,24 +83,23 @@ void displayTask(void *pvParameters) {
             displayManager.toggleMode();
         }
         
+        // Read sensor data from shared memory
         int distance = -1;
         IMUData imu_data;
         bool is_moving = false;
         
-        // Read ToF data
         if (xSemaphoreTake(distanceMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             distance = shared_distance;
             xSemaphoreGive(distanceMutex);
         }
         
-        // Read IMU data
         if (xSemaphoreTake(imuMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             imu_data = shared_imu_data;
             is_moving = shared_is_moving;
             xSemaphoreGive(imuMutex);
         }
         
-        // Update display using DisplayManager
+        // Update display
         displayManager.update(distance, imu_data, is_moving);
         
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
@@ -101,68 +108,70 @@ void displayTask(void *pvParameters) {
 
 void setup()
 {
+    // Initialize M5 system
     M5.begin();
 
-    // Initialize display manager
-    displayManager.begin(1); // 1 = landscape orientation
+    // Initialize display with landscape orientation
+    displayManager.begin(1);
 
-    // M5StickC Plus2: SDA=GPIO0, SCL=GPIO26 (Port A)
+    // Get I2C pins for M5StickC Plus2 (Port A: SDA=GPIO0, SCL=GPIO26)
     auto pin_sda = M5.getPin(m5::pin_name_t::port_a_sda);
     auto pin_scl = M5.getPin(m5::pin_name_t::port_a_scl);
 
-    // Initialize ToF sensor
+    // Initialize ToF sensor (critical - halt on failure)
     if (!tofSensor.begin(pin_sda, pin_scl))
     {
         displayManager.showError("ToF NOT\nfound!");
-        while (1)
-        {
-            delay(1000);
-        }
+        while (1) { delay(1000); }
     }
 
-    // Initialize IMU sensor
+    // Initialize IMU sensor (optional - continue on failure)
     if (!imuSensor.begin())
     {
         displayManager.showError("IMU NOT\nfound!", TFT_YELLOW);
         delay(2000);
     }
 
+    // Show ready message
     displayManager.showStartup("Sensors\nReady");
     delay(2000);
 
-    // Create mutexes
+    // Create mutexes for thread-safe data sharing
     distanceMutex = xSemaphoreCreateMutex();
     imuMutex = xSemaphoreCreateMutex();
 
-    // Create FreeRTOS tasks
+    // Create FreeRTOS tasks on Core 1
+    // IMU Task: High priority for responsive motion detection
     xTaskCreatePinnedToCore(
-        imuTask,              // Task function
-        "IMUTask",            // Task name
-        4096,                 // Stack size
-        NULL,                 // Parameters
-        3,                    // Priority (highest)
-        &imuTaskHandle,       // Task handle
-        1                     // Core 1
+        imuTask,
+        "IMU",
+        4096,
+        NULL,
+        3,                    // Highest priority
+        &imuTaskHandle,
+        1
     );
 
+    // ToF Sensor Task: Medium priority with motion-aware filtering
     xTaskCreatePinnedToCore(
-        sensorTask,           // Task function
-        "SensorTask",         // Task name
-        4096,                 // Stack size
-        NULL,                 // Parameters
-        2,                    // Priority (high)
-        &sensorTaskHandle,    // Task handle
-        1                     // Core 1
+        sensorTask,
+        "ToF",
+        4096,
+        NULL,
+        2,                    // Medium priority
+        &sensorTaskHandle,
+        1
     );
 
+    // Display Task: Low priority for UI updates
     xTaskCreatePinnedToCore(
-        displayTask,          // Task function
-        "DisplayTask",        // Task name
-        4096,                 // Stack size
-        NULL,                 // Parameters
-        1,                    // Priority (lower)
-        &displayTaskHandle,   // Task handle
-        1                     // Core 1
+        displayTask,
+        "Display",
+        4096,
+        NULL,
+        1,                    // Lowest priority
+        &displayTaskHandle,
+        1
     );
 }
 

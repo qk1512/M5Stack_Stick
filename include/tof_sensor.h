@@ -12,8 +12,8 @@ public:
     // Initialize sensor with I2C pins
     bool begin(int pin_sda, int pin_scl);
     
-    // Update sensor readings
-    void update();
+    // Update sensor readings with motion state for adaptive filtering
+    void update(bool is_moving = false);
     
     // Get filtered distance in mm (-1 if invalid)
     int getDistance();

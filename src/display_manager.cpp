@@ -53,12 +53,12 @@ void DisplayManager::toggleMode() {
         case DisplayMode::COMPACT:
             current_mode = DisplayMode::SPORT;
             break;
-/*         case DisplayMode::SPORT:
+        case DisplayMode::SPORT:
             current_mode = DisplayMode::DISTANCE_ONLY;
             break;
         case DisplayMode::DISTANCE_ONLY:
             current_mode = DisplayMode::COMPACT;
-            break; */
+            break;
     }
 }
 
